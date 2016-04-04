@@ -104,6 +104,7 @@ public class S3BlobStoreTests extends ESBlobStoreTestCase {
         String bucket = randomAlphaOfLength(randomIntBetween(1, 10)).toLowerCase(Locale.ROOT);
         ByteSizeValue bufferSize = new ByteSizeValue(randomIntBetween(5, 100), ByteSizeUnit.MB);
         boolean serverSideEncryption = randomBoolean();
+        boolean clientSideEncryption = randomBoolean();
 
         String cannedACL = null;
         if (randomBoolean()) {
@@ -116,6 +117,7 @@ public class S3BlobStoreTests extends ESBlobStoreTestCase {
         }
 
         AmazonS3 client = new MockAmazonS3(new ConcurrentHashMap<>(), bucket, serverSideEncryption, cannedACL, storageClass);
-        return new S3BlobStore(Settings.EMPTY, client, bucket, serverSideEncryption, bufferSize, cannedACL, storageClass);
+        return new S3BlobStore(Settings.EMPTY, client, bucket, serverSideEncryption, clientSideEncryption, bufferSize,
+            cannedACL, storageClass);
     }
 }

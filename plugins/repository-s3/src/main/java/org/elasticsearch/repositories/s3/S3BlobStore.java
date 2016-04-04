@@ -20,6 +20,7 @@
 package org.elasticsearch.repositories.s3;
 
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3EncryptionClient;
 import com.amazonaws.services.s3.model.CannedAccessControlList;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest.KeyVersion;
@@ -49,17 +50,26 @@ class S3BlobStore extends AbstractComponent implements BlobStore {
 
     private final boolean serverSideEncryption;
 
+    private final boolean clientSideEncryption;
+
     private final CannedAccessControlList cannedACL;
 
     private final StorageClass storageClass;
 
     S3BlobStore(Settings settings, AmazonS3 client, String bucket, boolean serverSideEncryption,
-                ByteSizeValue bufferSize, String cannedACL, String storageClass) {
+                boolean clientSideEncryption, ByteSizeValue bufferSize, String cannedACL, String storageClass) {
         super(settings);
         this.client = client;
         this.bucket = bucket;
         this.serverSideEncryption = serverSideEncryption;
+        this.clientSideEncryption = clientSideEncryption;
         this.bufferSize = bufferSize;
+
+        if (client instanceof AmazonS3EncryptionClient && this.bufferSize.getBytes() % 16 > 0) {
+            throw new BlobStoreException("Detected client-side encryption " +
+                "and a buffer_size for the S3 storage not a multiple of the cipher block size (16)");
+        }
+
         this.cannedACL = initCannedACL(cannedACL);
         this.storageClass = initStorageClass(storageClass);
 
@@ -91,6 +101,10 @@ class S3BlobStore extends AbstractComponent implements BlobStore {
 
     public boolean serverSideEncryption() {
         return serverSideEncryption;
+    }
+
+    public boolean clientSideEncryption() {
+        return clientSideEncryption;
     }
 
     public long bufferSizeInBytes() {

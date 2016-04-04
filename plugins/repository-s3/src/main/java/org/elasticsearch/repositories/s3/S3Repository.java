@@ -140,6 +140,12 @@ class S3Repository extends BlobStoreRepository {
      */
     static final Setting<String> BASE_PATH_SETTING = Setting.simpleString("base_path");
 
+    /**
+     * When set to true files are encrypted on client side using
+     * Defaults to false.
+     */
+    static final Setting<Boolean> CLIENT_SIDE_ENCRYPTION_SETTING = Setting.boolSetting("client_side_encryption", false);
+
     private final S3BlobStore blobStore;
 
     private final BlobPath basePath;
@@ -158,7 +164,7 @@ class S3Repository extends BlobStoreRepository {
         if (bucket == null) {
             throw new RepositoryException(metadata.name(), "No bucket defined for s3 repository");
         }
-
+        boolean clientSideEncryption = CLIENT_SIDE_ENCRYPTION_SETTING.get(metadata.settings());
         boolean serverSideEncryption = SERVER_SIDE_ENCRYPTION_SETTING.get(metadata.settings());
         ByteSizeValue bufferSize = BUFFER_SIZE_SETTING.get(metadata.settings());
         this.chunkSize = CHUNK_SIZE_SETTING.get(metadata.settings());
@@ -174,12 +180,14 @@ class S3Repository extends BlobStoreRepository {
         String storageClass = STORAGE_CLASS_SETTING.get(metadata.settings());
         String cannedACL = CANNED_ACL_SETTING.get(metadata.settings());
 
+
         logger.debug("using bucket [{}], chunk_size [{}], server_side_encryption [{}], " +
-            "buffer_size [{}], cannedACL [{}], storageClass [{}]",
-            bucket, chunkSize, serverSideEncryption, bufferSize, cannedACL, storageClass);
+                "buffer_size [{}], cannedACL [{}], storageClass [{}], client_side_encryption [{}]",
+            bucket, chunkSize, serverSideEncryption, bufferSize, cannedACL, storageClass, clientSideEncryption);
 
         AmazonS3 client = s3Service.client(metadata.settings());
-        blobStore = new S3BlobStore(settings, client, bucket, serverSideEncryption, bufferSize, cannedACL, storageClass);
+
+        blobStore = new S3BlobStore(settings, client, bucket, serverSideEncryption, clientSideEncryption, bufferSize, cannedACL, storageClass);
 
         String basePath = BASE_PATH_SETTING.get(metadata.settings());
         if (Strings.hasLength(basePath)) {

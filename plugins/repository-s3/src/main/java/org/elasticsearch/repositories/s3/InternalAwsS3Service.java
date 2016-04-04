@@ -28,6 +28,10 @@ import com.amazonaws.http.IdleConnectionReaper;
 import com.amazonaws.internal.StaticCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.AmazonS3EncryptionClient;
+import com.amazonaws.services.s3.model.CryptoConfiguration;
+import com.amazonaws.services.s3.model.EncryptionMaterials;
+import com.amazonaws.services.s3.model.StaticEncryptionMaterialsProvider;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.Strings;
@@ -36,6 +40,8 @@ import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.settings.SecureString;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.collect.Tuple;
+
 
 import java.util.HashMap;
 import java.util.Map;
@@ -75,7 +81,18 @@ class InternalAwsS3Service extends AbstractLifecycleComponent implements AwsS3Se
         AWSCredentialsProvider credentials = buildCredentials(logger, deprecationLogger, clientSettings, repositorySettings);
         ClientConfiguration configuration = buildConfiguration(clientSettings);
 
-        client = new AmazonS3Client(credentials, configuration);
+        EncryptionMaterials clientSideEncryptionMaterials = clientSettings.clientSideEncryptionMaterials;
+
+        if (clientSideEncryptionMaterials != null) {
+            client = new AmazonS3EncryptionClient(
+                credentials,
+                new StaticEncryptionMaterialsProvider(clientSideEncryptionMaterials),
+                configuration,
+                new CryptoConfiguration());
+
+        } else {
+            client = new AmazonS3Client(credentials, configuration);
+        }
 
         if (Strings.hasText(clientSettings.endpoint)) {
             client.setEndpoint(clientSettings.endpoint);

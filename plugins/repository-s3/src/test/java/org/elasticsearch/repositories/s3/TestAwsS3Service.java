@@ -22,6 +22,7 @@ package org.elasticsearch.repositories.s3;
 import java.util.IdentityHashMap;
 
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.model.EncryptionMaterials;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.cluster.metadata.RepositoryMetaData;
 import org.elasticsearch.common.settings.Settings;

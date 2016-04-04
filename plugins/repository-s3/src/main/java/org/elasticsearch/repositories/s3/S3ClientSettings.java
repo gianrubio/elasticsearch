@@ -19,6 +19,12 @@
 
 package org.elasticsearch.repositories.s3;
 
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
@@ -28,12 +34,19 @@ import java.util.Set;
 import com.amazonaws.ClientConfiguration;
 import com.amazonaws.Protocol;
 import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.s3.model.EncryptionMaterials;
+import com.amazonaws.util.Base64;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.SecureSetting;
 import org.elasticsearch.common.settings.SecureString;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.repositories.RepositoryException;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * A container for settings used to create an S3 client.
@@ -119,9 +132,20 @@ class S3ClientSettings {
     /** Whether the s3 client should use an exponential backoff retry policy. */
     final boolean throttleRetries;
 
+    final EncryptionMaterials clientSideEncryptionMaterials;
+    /** TODO review comments **/
+    static final Setting.AffixSetting<SecureString> CLIENT_SYMMETRIC_KEY = Setting.affixKeySetting(PREFIX, "client_symmetric_key",
+        key -> SecureSetting.secureString(key, null));
+    static final Setting.AffixSetting<SecureString> CLIENT_PUBLIC_KEY = Setting.affixKeySetting(PREFIX, "client_public_key",
+        key -> SecureSetting.secureString(key, null));
+    static final Setting.AffixSetting<SecureString> CLIENT_PRIVATE_KEY = Setting.affixKeySetting(PREFIX, "client_private_key",
+        key -> SecureSetting.secureString(key, null));
+
+
     private S3ClientSettings(BasicAWSCredentials credentials, String endpoint, Protocol protocol,
                              String proxyHost, int proxyPort, String proxyUsername, String proxyPassword,
-                             int readTimeoutMillis, int maxRetries, boolean throttleRetries) {
+                             int readTimeoutMillis, int maxRetries, boolean throttleRetries,
+                             EncryptionMaterials clientSideEncryptionMaterials ) {
         this.credentials = credentials;
         this.endpoint = endpoint;
         this.protocol = protocol;
@@ -132,6 +156,7 @@ class S3ClientSettings {
         this.readTimeoutMillis = readTimeoutMillis;
         this.maxRetries = maxRetries;
         this.throttleRetries = throttleRetries;
+        this.clientSideEncryptionMaterials = clientSideEncryptionMaterials;
     }
 
     /**
@@ -170,6 +195,12 @@ class S3ClientSettings {
             } else if (secretKey.length() != 0) {
                 throw new IllegalArgumentException("Missing access key for s3 client [" + clientName + "]");
             }
+            String symmetricKey = getConfigValue(settings, clientName, CLIENT_SYMMETRIC_KEY).toString();
+            String publicKey = getConfigValue(settings, clientName, CLIENT_PUBLIC_KEY).toString();
+            String privateKey = getConfigValue(settings, clientName, CLIENT_PRIVATE_KEY).toString();
+
+            EncryptionMaterials encryptionMaterials = getClientSideEncryption(symmetricKey, publicKey, privateKey);
+
             return new S3ClientSettings(
                 credentials,
                 getConfigValue(settings, clientName, ENDPOINT_SETTING),
@@ -180,7 +211,8 @@ class S3ClientSettings {
                 proxyPassword.toString(),
                 (int)getConfigValue(settings, clientName, READ_TIMEOUT_SETTING).millis(),
                 getConfigValue(settings, clientName, MAX_RETRIES_SETTING),
-                getConfigValue(settings, clientName, USE_THROTTLE_RETRIES_SETTING)
+                getConfigValue(settings, clientName, USE_THROTTLE_RETRIES_SETTING),
+                encryptionMaterials
             );
         }
     }
@@ -189,6 +221,57 @@ class S3ClientSettings {
                                         Setting.AffixSetting<T> clientSetting) {
         Setting<T> concreteSetting = clientSetting.getConcreteSettingForNamespace(clientName);
         return concreteSetting.get(settings);
+    }
+
+
+    /**
+     * Init and verify getClientSideEncryption settings
+     */
+    private static EncryptionMaterials getClientSideEncryption(String symmetricKey, String publicKey, String privateKey) {
+
+        EncryptionMaterials clientSideEncryptionMaterials = null;
+
+        if (Strings.isNullOrEmpty(symmetricKey) == false && (Strings.isNullOrEmpty(publicKey) == false ||
+            Strings.isNullOrEmpty(privateKey) == false)) {
+            throw new IllegalArgumentException("Client-side encryption: You can't specify a symmetric key " +
+                "AND a public/private key pair");
+        }
+
+        if (Strings.isNullOrEmpty(symmetricKey) == false || Strings.isNullOrEmpty(publicKey) == false ||
+            Strings.isNullOrEmpty(privateKey) == false) {
+            try {
+                // Check crypto
+                if (Cipher.getMaxAllowedKeyLength("AES") < 256) {
+                    throw new IllegalArgumentException("Client-side encryption: Please install the Java " +
+                        "Cryptography Extension");
+                }
+
+                // Transform the keys in a EncryptionMaterials
+                if (Strings.isNullOrEmpty(symmetricKey) == false) {
+                    clientSideEncryptionMaterials = new EncryptionMaterials(new SecretKeySpec(
+                        Base64.decode(symmetricKey), "AES"));
+                } else {
+                    if (Strings.isNullOrEmpty(publicKey) || Strings.isNullOrEmpty(privateKey)) {
+                        String missingKey = Strings.isNullOrEmpty(publicKey) ? "public key" : "private key";
+                        throw new IllegalArgumentException("Client-side encryption: " + missingKey + " is missing");
+                    }
+
+                    clientSideEncryptionMaterials = new EncryptionMaterials(new KeyPair(
+                        KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(Base64.decode(publicKey))),
+                        KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(
+                            Base64.decode(privateKey)))));
+                }
+
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Client-side encryption: Error decoding your keys: " + e.getMessage());
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            } catch (InvalidKeySpecException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+        }
+
+        return clientSideEncryptionMaterials;
     }
 
 }
